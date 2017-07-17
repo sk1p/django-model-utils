@@ -14,35 +14,37 @@ from django.db.models.constants import LOOKUP_SEP
 from django.utils.six import string_types
 
 
-class InheritanceIterable(BaseIterable):
-    def __iter__(self):
-        queryset = self.queryset
-        iter = ModelIterable(queryset)
-        if getattr(queryset, 'subclasses', False):
-            extras = tuple(queryset.query.extra.keys())
-            # sort the subclass names longest first,
-            # so with 'a' and 'a__b' it goes as deep as possible
-            subclasses = sorted(queryset.subclasses, key=len, reverse=True)
-            for obj in iter:
-                sub_obj = None
-                for s in subclasses:
-                    sub_obj = queryset._get_sub_obj_recurse(obj, s)
-                    if sub_obj:
-                        break
-                if not sub_obj:
-                    sub_obj = obj
+def _make_inheritance_iterable(base_iter, queryset):
+    if getattr(queryset, 'subclasses', False):
+        extras = tuple(queryset.query.extra.keys())
+        # sort the subclass names longest first,
+        # so with 'a' and 'a__b' it goes as deep as possible
+        subclasses = sorted(queryset.subclasses, key=len, reverse=True)
+        for obj in base_iter:
+            sub_obj = None
+            for s in subclasses:
+                sub_obj = queryset._get_sub_obj_recurse(obj, s)
+                if sub_obj:
+                    break
+            if not sub_obj:
+                sub_obj = obj
 
-                if getattr(queryset, '_annotated', False):
-                    for k in queryset._annotated:
-                        setattr(sub_obj, k, getattr(obj, k))
-
-                for k in extras:
+            if getattr(queryset, '_annotated', False):
+                for k in queryset._annotated:
                     setattr(sub_obj, k, getattr(obj, k))
 
-                yield sub_obj
-        else:
-            for obj in iter:
-                yield obj
+            for k in extras:
+                setattr(sub_obj, k, getattr(obj, k))
+
+            yield sub_obj
+    else:
+        for obj in base_iter:
+            yield obj
+
+
+class InheritanceIterable(BaseIterable):
+    def __iter__(self):
+        return _make_inheritance_iterable(ModelIterable(self.queryset), self.queryset)
 
 
 class InheritanceQuerySetMixin(object):
@@ -105,33 +107,11 @@ class InheritanceQuerySetMixin(object):
         return qset
 
     def iterator(self):
-        # Maintained for Django 1.8 compatability
         iter = super(InheritanceQuerySetMixin, self).iterator()
-        if getattr(self, 'subclasses', False):
-            extras = tuple(self.query.extra.keys())
-            # sort the subclass names longest first,
-            # so with 'a' and 'a__b' it goes as deep as possible
-            subclasses = sorted(self.subclasses, key=len, reverse=True)
-            for obj in iter:
-                sub_obj = None
-                for s in subclasses:
-                    sub_obj = self._get_sub_obj_recurse(obj, s)
-                    if sub_obj:
-                        break
-                if not sub_obj:
-                    sub_obj = obj
-
-                if getattr(self, '_annotated', False):
-                    for k in self._annotated:
-                        setattr(sub_obj, k, getattr(obj, k))
-
-                for k in extras:
-                    setattr(sub_obj, k, getattr(obj, k))
-
-                yield sub_obj
+        if django.VERSION < (1, 9):
+            return _make_inheritance_iterable(iter, self)
         else:
-            for obj in iter:
-                yield obj
+            return iter
 
     def _get_subclasses_recurse(self, model, levels=None):
         """
